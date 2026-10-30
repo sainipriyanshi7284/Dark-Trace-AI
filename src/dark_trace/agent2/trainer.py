@@ -7,7 +7,7 @@ reproducible training and artifact lifecycle.
 from datetime import datetime, timezone
 import os
 import statistics
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from dark_trace.agent2.config import ModelConfig, PreprocessingConfig
 from dark_trace.agent2.model import IsolationForestModel

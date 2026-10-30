@@ -1,5 +1,7 @@
 """Agent 3 custom exceptions."""
 
+from typing import Any
+
 
 class Agent3Error(Exception):
     """Base exception for all Agent 3 errors."""
