@@ -38,8 +38,10 @@ class PolicyAction(str, Enum):
 
 class PolicyProfile(str, Enum):
     """Operational posture profiles for policy evaluation."""
-    DEFAULT = "DEFAULT"
+    BALANCED = "BALANCED"
     STRICT = "STRICT"
+    CONSERVATIVE = "CONSERVATIVE"
+    DEFAULT = "DEFAULT"
     PERMISSIVE = "PERMISSIVE"
 
 
@@ -83,9 +85,10 @@ class PolicyDecision:
     agent_id: str = "A4"
     flow_id: str = "UNKNOWN"
     action: PolicyAction = PolicyAction.REVIEW
-    policy_profile: str = "DEFAULT"
+    policy_profile: str = "BALANCED"
     risk_level: str = "UNKNOWN"
     confidence_level: str = "LOW"
+    evidence_status: str = "INSUFFICIENT_EVIDENCE"
     matched_rule: str = "RULE_UNSPECIFIED"
     decision_reason: str = ""
     requires_human_review: bool = True
@@ -103,6 +106,7 @@ class PolicyDecision:
             "policy_profile": self.policy_profile,
             "risk_level": self.risk_level,
             "confidence_level": self.confidence_level,
+            "evidence_status": self.evidence_status,
             "matched_rule": self.matched_rule,
             "decision_reason": self.decision_reason,
             "requires_human_review": self.requires_human_review,

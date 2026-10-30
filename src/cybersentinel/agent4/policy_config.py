@@ -47,6 +47,11 @@ class PolicyConfig:
     suspicious_benign_action: PolicyAction = PolicyAction.REVIEW
     malformed_input_action: PolicyAction = PolicyAction.REVIEW
     simulated_enforcement: bool = True
+    # Adaptive Profile Specific Behavior Flags
+    escalate_suspicious_medium: bool = False
+    escalate_conflicts_to_review: bool = False
+    require_high_confidence_for_block: bool = False
+    require_supporting_evidence_for_block: bool = False
 
     def validate(self) -> None:
         """Validate configuration settings."""
@@ -68,7 +73,105 @@ class PolicyConfig:
     @classmethod
     def default_profile(cls) -> PolicyConfig:
         """Default balanced operational profile."""
-        return cls(policy_profile=PolicyProfile.DEFAULT)
+        return cls.balanced_profile()
+
+    @classmethod
+    def balanced_profile(cls) -> PolicyConfig:
+        """Balanced operational profile balancing security and operational continuity."""
+        return cls(
+            policy_profile=PolicyProfile.BALANCED,
+            risk_action_mapping={
+                "LOW": PolicyAction.ALLOW,
+                "MEDIUM": PolicyAction.ALERT,
+                "HIGH": PolicyAction.REVIEW,
+                "CRITICAL": PolicyAction.BLOCK,
+            },
+            override_insufficient_evidence=True,
+            override_evidence_disagreement=True,
+            disagreement_action=PolicyAction.REVIEW,
+            override_low_confidence_block=True,
+            low_confidence_fallback_action=PolicyAction.REVIEW,
+            override_suspicious_benign=True,
+            suspicious_benign_action=PolicyAction.REVIEW,
+            malformed_input_action=PolicyAction.REVIEW,
+            escalate_suspicious_medium=False,
+            escalate_conflicts_to_review=False,
+            require_high_confidence_for_block=False,
+            require_supporting_evidence_for_block=False,
+        )
+
+    @classmethod
+    def adaptive_strict_profile(cls) -> PolicyConfig:
+        """Strict operational posture profile prioritizing early threat escalation."""
+        return cls(
+            policy_profile=PolicyProfile.STRICT,
+            risk_action_mapping={
+                "LOW": PolicyAction.ALLOW,
+                "MEDIUM": PolicyAction.ALERT,
+                "HIGH": PolicyAction.REVIEW,
+                "CRITICAL": PolicyAction.BLOCK,
+            },
+            override_insufficient_evidence=True,
+            override_evidence_disagreement=True,
+            disagreement_action=PolicyAction.REVIEW,
+            override_low_confidence_block=True,
+            low_confidence_fallback_action=PolicyAction.REVIEW,
+            override_suspicious_benign=True,
+            suspicious_benign_action=PolicyAction.REVIEW,
+            malformed_input_action=PolicyAction.REVIEW,
+            escalate_suspicious_medium=True,
+            escalate_conflicts_to_review=True,
+            require_high_confidence_for_block=False,
+            require_supporting_evidence_for_block=False,
+        )
+
+    @classmethod
+    def conservative_profile(cls) -> PolicyConfig:
+        """Conservative profile minimizing disruption; requires high confidence to block."""
+        return cls(
+            policy_profile=PolicyProfile.CONSERVATIVE,
+            risk_action_mapping={
+                "LOW": PolicyAction.ALLOW,
+                "MEDIUM": PolicyAction.ALERT,
+                "HIGH": PolicyAction.REVIEW,
+                "CRITICAL": PolicyAction.BLOCK,
+            },
+            override_insufficient_evidence=True,
+            override_evidence_disagreement=True,
+            disagreement_action=PolicyAction.ALERT,
+            override_low_confidence_block=True,
+            low_confidence_fallback_action=PolicyAction.REVIEW,
+            override_suspicious_benign=True,
+            suspicious_benign_action=PolicyAction.REVIEW,
+            malformed_input_action=PolicyAction.REVIEW,
+            escalate_suspicious_medium=False,
+            escalate_conflicts_to_review=False,
+            require_high_confidence_for_block=True,
+            require_supporting_evidence_for_block=True,
+        )
+
+    @classmethod
+    def from_profile(cls, profile: Union[str, PolicyProfile]) -> PolicyConfig:
+        """Load configured PolicyConfig for requested profile."""
+        from cybersentinel.agent4.exceptions import InvalidProfileError
+
+        if isinstance(profile, PolicyProfile):
+            prof_str = profile.value
+        else:
+            prof_str = str(profile).strip().upper()
+
+        if prof_str in ("STRICT",):
+            return cls.adaptive_strict_profile()
+        elif prof_str in ("BALANCED", "DEFAULT"):
+            return cls.balanced_profile()
+        elif prof_str in ("CONSERVATIVE",):
+            return cls.conservative_profile()
+        elif prof_str in ("PERMISSIVE",):
+            return cls.permissive_profile()
+        else:
+            raise InvalidProfileError(
+                f"Unknown policy profile '{profile}'. Supported profiles: STRICT, BALANCED, CONSERVATIVE."
+            )
 
     @classmethod
     def strict_profile(cls) -> PolicyConfig:

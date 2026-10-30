@@ -37,3 +37,24 @@ class PolicyExecutionError(Agent4Error):
     """Raised when policy evaluation encounters an unexpected runtime error."""
     pass
 
+
+class InvalidProfileError(PolicyConfigurationError):
+    """Raised when an unknown or unsupported policy profile is requested."""
+    pass
+
+
+class AuditLogError(Agent4Error):
+    """Base exception for audit logging errors."""
+    pass
+
+
+class AuditLogWriteError(AuditLogError):
+    """Raised when an audit record cannot be written to disk."""
+    pass
+
+
+class AuditLogReadError(AuditLogError):
+    """Raised when audit log records cannot be read due to file system errors."""
+    pass
+
+
