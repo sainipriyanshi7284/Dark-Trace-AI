@@ -1,40 +1,47 @@
 
-name: Build CyberSentinel Windows EXE
+name: CyberSentinel Release
 
 on:
   push:
-    branches:
-      - main
-      - feature_modules
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  build-windows:
+  build-and-release:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build React frontend
-        run: npm run build
-
-      - name: Package Windows EXE
+      - name: Build and package EXE
         run: npm run dist
 
-      - name: Upload EXE
-        uses: actions/upload-artifact@v4
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem "release/*.exe"
+          if (-not $files) {
+            throw "No EXE installer found in release/"
+          }
+          Get-ChildItem "release/*.exe"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
         with:
-          name: CyberSentinel-Windows-EXE
-          path: release/*.exe
-          if-no-files-found: error
-          retention-days: 30
+          name: CyberSentinel ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release/*.exe
