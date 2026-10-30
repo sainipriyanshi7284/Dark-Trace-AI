@@ -93,11 +93,18 @@ class A1DetectionResult:
     status: AgentStatus = AgentStatus.SUCCESS
     threat_detected: bool = False
     threat_type: Optional[str] = None
+    predicted_class: Optional[str] = None
     confidence: float = 0.0  # Range [0.0, 1.0]
+    probabilities: Optional[Dict[str, float]] = None
     rule_id: Optional[str] = None
     features: Dict[str, Any] = field(default_factory=dict)
     latency_ms: Optional[float] = None
     error_message: Optional[str] = None
+
+    @property
+    def threat_class(self) -> Optional[str]:
+        """Class alias for predicted_class or threat_type."""
+        return self.predicted_class or self.threat_type
 
     def validate(self) -> None:
         """Validate A1 detection values."""
@@ -111,38 +118,54 @@ class A2DetectionResult:
     agent_id: str = "agent_2"
     status: AgentStatus = AgentStatus.SUCCESS
     anomaly_detected: bool = False
-    anomaly_score: float = 0.0  # Range [0.0, 1.0]
+    anomaly_score: float = 0.0
     anomaly_type: Optional[str] = None
     confidence: float = 0.0  # Range [0.0, 1.0]
+    evidence: List[str] = field(default_factory=list)
     model_version: Optional[str] = None
     features: Dict[str, Any] = field(default_factory=dict)
     latency_ms: Optional[float] = None
     error_message: Optional[str] = None
 
+    @property
+    def is_anomaly(self) -> bool:
+        """Alias for anomaly_detected."""
+        return self.anomaly_detected
+
     def validate(self) -> None:
         """Validate A2 detection values."""
-        if not (0.0 <= self.anomaly_score <= 1.0):
-            raise ValueError("Agent 2 anomaly_score must be in range [0.0, 1.0]")
         if not (0.0 <= self.confidence <= 1.0):
             raise ValueError("Agent 2 confidence must be in range [0.0, 1.0]")
+        if self.anomaly_score < 0.0:
+            raise ValueError("Agent 2 anomaly_score must be non-negative")
 
 
 @dataclass
 class Agent3Input:
     """Consolidated input structure ingested by Agent 3."""
     flow_context: FlowContext
-    a1_result: Optional[A1DetectionResult] = None
-    a2_result: Optional[A2DetectionResult] = None
+    a1_result: Optional[Any] = None
+    a2_result: Optional[Any] = None
     network_metadata: Optional[Dict[str, Any]] = field(default_factory=dict)
+
+    @property
+    def a1_prediction(self) -> Optional[Any]:
+        """Alias for a1_result."""
+        return self.a1_result
+
+    @property
+    def a2_assessment(self) -> Optional[Any]:
+        """Alias for a2_result."""
+        return self.a2_result
 
     def validate(self) -> None:
         """Validate top-level input."""
         if self.flow_context is None:
             raise ValueError("flow_context is required")
         self.flow_context.validate()
-        if self.a1_result is not None:
+        if self.a1_result is not None and hasattr(self.a1_result, "validate"):
             self.a1_result.validate()
-        if self.a2_result is not None:
+        if self.a2_result is not None and hasattr(self.a2_result, "validate"):
             self.a2_result.validate()
 
 

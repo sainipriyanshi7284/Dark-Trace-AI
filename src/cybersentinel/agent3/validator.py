@@ -41,6 +41,8 @@ A1_CLASS_NORMALIZATION: Dict[str, str] = {
     "DDOS": "DDOS",
     "PORT SCAN": "PORT SCAN",
     "PORT_SCAN": "PORT SCAN",
+    "SYN_FLOOD": "DOS",
+    "SYN FLOOD": "DOS",
 }
 
 
@@ -187,18 +189,26 @@ def validate_agent1_output(data: Any) -> ValidationResult:
             if k in raw_dict:
                 class_key = k
                 break
-        class_present = class_key is not None
-        class_val = raw_dict[class_key] if class_present else None
+        if class_key is None and raw_dict.get("threat_detected") is False:
+            class_val = "BENIGN"
+            class_present = True
+        else:
+            class_present = class_key is not None
+            class_val = raw_dict[class_key] if class_present else None
         conf_val = raw_dict.get("confidence")
         probs_val = raw_dict.get("probabilities")
     elif hasattr(data, "__dataclass_fields__") or hasattr(data, "confidence"):
         class_key = None
         for k in ("predicted_class", "threat_class", "threat_type"):
-            if hasattr(data, k):
+            if getattr(data, k, None) is not None:
                 class_key = k
                 break
-        class_present = class_key is not None
-        class_val = getattr(data, class_key, None) if class_present else None
+        if class_key is None and getattr(data, "threat_detected", None) is False:
+            class_val = "BENIGN"
+            class_present = True
+        else:
+            class_present = class_key is not None
+            class_val = getattr(data, class_key, None) if class_present else None
         conf_val = getattr(data, "confidence", None)
         probs_val = getattr(data, "probabilities", None)
     else:
