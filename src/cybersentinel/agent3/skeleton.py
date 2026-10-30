@@ -27,13 +27,23 @@ from cybersentinel.agent3.exceptions import (
     Agent3Error,
     InvalidInputError,
     MissingAgentError,
+    SchemaValidationError,
 )
 from cybersentinel.agent3.fusion_scorer import (
     FusionConfig,
     FusionResult,
     FusionScorer,
 )
-from cybersentinel.agent3.schemas import Agent3FusionInput
+from cybersentinel.agent3.schemas import (
+    Agent1ThreatPrediction,
+    Agent2AnomalyAssessment,
+    Agent3FusionInput,
+    Agent3ThreatAssessment,
+)
+from cybersentinel.agent3.validator import (
+    validate_agent1_output,
+    validate_agent2_output,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -205,3 +215,136 @@ class Agent3Skeleton:
 
         output = self.process(input_data)
         return output.to_dict()
+
+    def process_flow(
+        self,
+        agent1_result: Optional[Union[Agent1ThreatPrediction, A1DetectionResult, Dict[str, Any]]] = None,
+        agent2_result: Optional[Union[Agent2AnomalyAssessment, A2DetectionResult, Dict[str, Any]]] = None,
+        flow_id: Optional[str] = None,
+        flow_context: Optional[Union[FlowContext, Dict[str, Any]]] = None,
+        strict_mode: Optional[bool] = None,
+    ) -> Agent3ThreatAssessment:
+        """Process a flow through the complete Agent 3 pipeline.
+
+        1. Input validation & missing agent checks
+        2. Evidence correlation across A1 and A2
+        3. Deterministic intelligent fusion scoring
+        4. Template-based explainability generation
+        5. Structured threat assessment emission
+
+        Args:
+            agent1_result: Agent 1 detection result or dict.
+            agent2_result: Agent 2 anomaly assessment or dict.
+            flow_id: Identifier for the flow.
+            flow_context: Optional FlowContext instance or dict.
+            strict_mode: Optional override for strict mode setting.
+
+        Returns:
+            Agent3ThreatAssessment: Final structured threat assessment.
+        """
+        start_time = time.perf_counter()
+        use_strict = self.strict_mode if strict_mode is None else strict_mode
+
+        # Reject obviously invalid input payload types
+        for agent_name, raw_res in (("Agent 1", agent1_result), ("Agent 2", agent2_result)):
+            if raw_res is not None and not isinstance(raw_res, dict) and not hasattr(raw_res, "__dataclass_fields__") and not hasattr(raw_res, "confidence"):
+                raise InvalidInputError(f"{agent_name} payload must be a dict or dataclass, got {type(raw_res).__name__}.")
+
+        # Resolve FlowContext
+        if flow_context is not None:
+            if isinstance(flow_context, dict):
+                flow_ctx = FlowContext(
+                    flow_id=str(flow_context.get("flow_id", flow_id or f"FLOW-{uuid.uuid4().hex[:8]}")),
+                    timestamp=str(flow_context.get("timestamp", "")),
+                    src_ip=str(flow_context.get("src_ip", "0.0.0.0")),
+                    src_port=int(flow_context.get("src_port", 0)),
+                    dst_ip=str(flow_context.get("dst_ip", "0.0.0.0")),
+                    dst_port=int(flow_context.get("dst_port", 0)),
+                    protocol=str(flow_context.get("protocol", "TCP")),
+                    packet_count=flow_context.get("packet_count"),
+                    byte_count=flow_context.get("byte_count"),
+                )
+            elif isinstance(flow_context, FlowContext):
+                flow_ctx = flow_context
+            else:
+                raise InvalidInputError(f"Expected FlowContext or dict for flow_context, got {type(flow_context).__name__}")
+        else:
+            import datetime
+            fid = flow_id or f"FLOW-{uuid.uuid4().hex[:8]}"
+            flow_ctx = FlowContext(
+                flow_id=fid,
+                timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                src_ip="192.168.1.1",
+                src_port=1024,
+                dst_ip="10.0.0.1",
+                dst_port=80,
+                protocol="TCP",
+            )
+
+        # Validate flow_context
+        try:
+            flow_ctx.validate()
+        except ValueError as exc:
+            raise InvalidInputError(f"Invalid flow context: {exc}") from exc
+
+        # Handle strict mode requirements
+        if use_strict:
+            if agent1_result is None or agent2_result is None:
+                raise MissingAgentError("Strict mode enabled: both Agent 1 and Agent 2 results are required.")
+            val1 = validate_agent1_output(agent1_result)
+            if not val1.is_valid:
+                raise SchemaValidationError(f"Invalid Agent 1 input in strict mode: {'; '.join(val1.error_messages)}", validation_result=val1)
+            val2 = validate_agent2_output(agent2_result)
+            if not val2.is_valid:
+                raise SchemaValidationError(f"Invalid Agent 2 input in strict mode: {'; '.join(val2.error_messages)}", validation_result=val2)
+
+        # Execute fusion scoring (which correlates and generates explanations)
+        fusion_result = self.scorer.score(
+            flow_context=flow_ctx,
+            a1_prediction=agent1_result,
+            a2_assessment=agent2_result,
+            flow_id=flow_ctx.flow_id,
+            timestamp=flow_ctx.timestamp,
+        )
+
+        elapsed_ms = round((time.perf_counter() - start_time) * 1000.0, 3)
+        return fusion_result.to_threat_assessment(processing_time_ms=elapsed_ms)
+
+
+def process_flow(
+    agent1_result: Optional[Union[Agent1ThreatPrediction, A1DetectionResult, Dict[str, Any]]] = None,
+    agent2_result: Optional[Union[Agent2AnomalyAssessment, A2DetectionResult, Dict[str, Any]]] = None,
+    flow_id: Optional[str] = None,
+    flow_context: Optional[Union[FlowContext, Dict[str, Any]]] = None,
+    strict_mode: bool = False,
+    config: Optional[FusionConfig] = None,
+) -> Agent3ThreatAssessment:
+    """Public standalone entry point for CyberSentinel Agent 3.
+
+    Provides a clean, unified invocation pipeline:
+      1. Validate inputs (distinguishing missing from malformed).
+      2. Correlate evidence across Agent 1 and Agent 2.
+      3. Compute normalized, deterministic multi-source fusion score.
+      4. Generate template-based, explainable cybersecurity rationale.
+      5. Return structured Agent3ThreatAssessment.
+
+    Args:
+        agent1_result: Agent 1 classification payload (dict, dataclass, or None).
+        agent2_result: Agent 2 anomaly assessment payload (dict, dataclass, or None).
+        flow_id: Network flow identifier string.
+        flow_context: Optional complete FlowContext or dictionary metadata.
+        strict_mode: If True, requires both A1 and A2 to be present.
+        config: Optional custom FusionConfig parameters.
+
+    Returns:
+        Agent3ThreatAssessment: Complete structured threat assessment.
+    """
+    skeleton = Agent3Skeleton(strict_mode=strict_mode, fusion_config=config)
+    return skeleton.process_flow(
+        agent1_result=agent1_result,
+        agent2_result=agent2_result,
+        flow_id=flow_id,
+        flow_context=flow_context,
+        strict_mode=strict_mode,
+    )
+

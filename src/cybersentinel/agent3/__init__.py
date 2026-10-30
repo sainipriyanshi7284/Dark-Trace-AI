@@ -26,6 +26,11 @@ from cybersentinel.agent3.exceptions import (
     MissingAgentError,
     SchemaValidationError,
 )
+from cybersentinel.agent3.explainer import (
+    ExplanationResult,
+    ThreatExplainer,
+    explain_threat,
+)
 from cybersentinel.agent3.fusion_scorer import (
     AssessmentVerdict,
     ConfidenceLevel,
@@ -39,8 +44,9 @@ from cybersentinel.agent3.schemas import (
     Agent1ThreatPrediction,
     Agent2AnomalyAssessment,
     Agent3FusionInput,
+    Agent3ThreatAssessment,
 )
-from cybersentinel.agent3.skeleton import Agent3Skeleton
+from cybersentinel.agent3.skeleton import Agent3Skeleton, process_flow
 from cybersentinel.agent3.validator import (
     A1ThreatClass,
     CANONICAL_A1_CLASSES,
@@ -94,4 +100,10 @@ __all__ = [
     "RiskLevel",
     "ConfidenceLevel",
     "AssessmentVerdict",
+    # Block 5 & Integration Additions
+    "Agent3ThreatAssessment",
+    "process_flow",
+    "ExplanationResult",
+    "ThreatExplainer",
+    "explain_threat",
 ]

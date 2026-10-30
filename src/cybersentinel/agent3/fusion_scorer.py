@@ -40,10 +40,12 @@ from cybersentinel.agent3.evidence_correlator import (
     InvestigationPriority,
     correlate_evidence,
 )
+from cybersentinel.agent3.explainer import ExplanationResult, ThreatExplainer
 from cybersentinel.agent3.schemas import (
     Agent1ThreatPrediction,
     Agent2AnomalyAssessment,
     Agent3FusionInput,
+    Agent3ThreatAssessment,
 )
 from cybersentinel.agent3.validator import (
     A1_CLASS_NORMALIZATION,
@@ -144,6 +146,52 @@ class FusionResult:
     top_two_margin: Optional[float] = None
     class_probabilities: Optional[Dict[str, float]] = None
     recommended_action: Optional[str] = None
+    explanation: Optional[Dict[str, str]] = None
+
+    @property
+    def score_breakdown(self) -> Dict[str, Any]:
+        """Convenience property returning structured score contributions and weights."""
+        return {
+            "classifier_score": self.classifier_score,
+            "anomaly_score": self.anomaly_score_normalized,
+            "correlation_score": self.correlation_score,
+            "configured_weights": dict(self.configured_weights),
+            "effective_weights": dict(self.effective_weights),
+        }
+
+    def __getitem__(self, item: str) -> Any:
+        """Allow subscript indexing on FusionResult."""
+        if hasattr(self, item):
+            return getattr(self, item)
+        raise KeyError(item)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Allow dict-like get method on FusionResult."""
+        return getattr(self, key, default)
+
+    def to_threat_assessment(self, processing_time_ms: float = 0.0) -> Agent3ThreatAssessment:
+        """Convert FusionResult to formal Agent3ThreatAssessment schema."""
+        return Agent3ThreatAssessment(
+            agent_id=self.agent_id,
+            flow_id=self.flow_id,
+            final_class=self.final_class,
+            assessment=self.assessment,
+            evidence_status=self.evidence_status,
+            agent_agreement=self.agent_agreement,
+            fusion_score=self.fusion_score,
+            risk_level=self.risk_level,
+            confidence_level=self.confidence_level,
+            supporting_evidence=list(self.supporting_evidence),
+            conflicting_evidence=list(self.conflicting_evidence),
+            uncertainty=list(self.uncertainty),
+            score_breakdown=self.score_breakdown,
+            reasoning=self.reasoning,
+            investigation_priority=self.investigation_priority,
+            timestamp=self.timestamp,
+            recommended_action=self.recommended_action,
+            explanation=self.explanation,
+            processing_time_ms=processing_time_ms,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert result to clean dictionary matching contract specification."""
@@ -154,19 +202,22 @@ class FusionResult:
             "assessment": self.assessment,
             "evidence_status": self.evidence_status,
             "agent_agreement": self.agent_agreement,
-            "classifier_score": self.classifier_score,
-            "anomaly_score_normalized": self.anomaly_score_normalized,
-            "correlation_score": self.correlation_score,
             "fusion_score": self.fusion_score,
-            "configured_weights": dict(self.configured_weights),
-            "effective_weights": dict(self.effective_weights),
             "risk_level": self.risk_level,
             "confidence_level": self.confidence_level,
             "supporting_evidence": list(self.supporting_evidence),
             "conflicting_evidence": list(self.conflicting_evidence),
             "uncertainty": list(self.uncertainty),
+            "score_breakdown": self.score_breakdown,
             "reasoning": self.reasoning,
             "investigation_priority": self.investigation_priority,
+            # Preserved for backward compatibility
+            "classifier_score": self.classifier_score,
+            "anomaly_score_normalized": self.anomaly_score_normalized,
+            "correlation_score": self.correlation_score,
+            "configured_weights": dict(self.configured_weights),
+            "effective_weights": dict(self.effective_weights),
+            "explanation": self.explanation,
         }
 
     def to_agent3_output(self, processing_time_ms: float = 0.0) -> Agent3Output:
@@ -238,6 +289,7 @@ class FusionScorer:
             low_confidence_threshold=self.config.classifier_confidence_threshold,
             strong_anomaly_threshold=self.config.strong_anomaly_threshold,
         )
+        self.explainer = ThreatExplainer()
 
     def _extract_classifier_score(
         self,
@@ -469,6 +521,23 @@ class FusionScorer:
         # Safeguard 5: If both agents are missing or unusable
         # ---------------------------------------------------------------------
         if not a1_ok and not a2_ok:
+            exp_res = self.explainer.explain(
+                a1_present=False,
+                a1_class=None,
+                a1_confidence=None,
+                a2_present=False,
+                a2_anomalous=False,
+                a2_score=None,
+                correlation_result=correlation_res,
+                fusion_score=None,
+                configured_weights=configured_weights,
+                effective_weights={"classifier": 0.0, "anomaly": 0.0, "correlation": 0.0},
+                risk_level=RiskLevel.UNKNOWN.value,
+                confidence_level=ConfidenceLevel.LOW.value,
+                assessment=AssessmentVerdict.INCONCLUSIVE.value,
+                uncertainties=["Both Agent 1 and Agent 2 evidence missing or unusable."],
+                final_class="UNKNOWN",
+            )
             return FusionResult(
                 agent_id="A3",
                 flow_id=fid,
@@ -487,9 +556,10 @@ class FusionScorer:
                 supporting_evidence=[],
                 conflicting_evidence=[],
                 uncertainty=["Both Agent 1 and Agent 2 evidence missing or unusable."],
-                reasoning="Both agents are missing or unusable. Insufficient evidence to compute fusion score or verdict.",
+                reasoning=exp_res.full_reasoning,
                 investigation_priority=InvestigationPriority.LOW.value,
                 timestamp=timestamp,
+                explanation=exp_res.to_dict(),
             )
 
         # ---------------------------------------------------------------------
@@ -631,28 +701,30 @@ class FusionScorer:
         # ---------------------------------------------------------------------
         # 6. Structured Explanation & Reasoning
         # ---------------------------------------------------------------------
-        reasoning_parts = [
-            f"Fusion score {fusion_score:.2f} (Risk: {risk_level.value}, Confidence: {confidence_level.value}).",
-        ]
-        if a1_ok:
-            reasoning_parts.append(f"Classifier evidence C={c_score:.2f} (Class: {final_class}, Conf: {a1_conf:.2f}).")
-        else:
-            reasoning_parts.append("Classifier evidence C=unavailable.")
-
-        if a2_ok:
-            reasoning_parts.append(f"Anomaly evidence A={a_score:.2f} (Detected: {a2_anom}).")
-        else:
-            reasoning_parts.append("Anomaly evidence A=unavailable.")
-
-        if r_ok:
-            reasoning_parts.append(f"Correlation evidence R={r_score:.2f} ({correlation_res.evidence_status.value}).")
-        else:
-            reasoning_parts.append("Correlation evidence R=unavailable.")
-
-        if uncertainties:
-            reasoning_parts.append(f"Uncertainty: {'; '.join(uncertainties)}")
-
-        full_reasoning = " ".join(reasoning_parts)
+        exp_res = self.explainer.explain(
+            a1_present=a1_ok,
+            a1_class=final_class if a1_ok else None,
+            a1_confidence=a1_conf,
+            a1_probabilities=a1_probs,
+            a1_margin=a1_margin,
+            a2_present=a2_ok,
+            a2_anomalous=a2_anom,
+            a2_score=a_score,
+            a2_evidence=a2_ev,
+            correlation_result=correlation_res,
+            fusion_score=fusion_score,
+            c_score=c_score,
+            a_score=a_score,
+            r_score=r_score,
+            configured_weights=configured_weights,
+            effective_weights=effective_weights,
+            risk_level=risk_level.value,
+            confidence_level=confidence_level.value,
+            assessment=assessment.value,
+            uncertainties=uncertainties,
+            final_class=final_class,
+        )
+        full_reasoning = exp_res.full_reasoning
 
         # Investigation Priority aligns with risk and correlation
         if risk_level == RiskLevel.CRITICAL:
@@ -688,6 +760,7 @@ class FusionScorer:
             predicted_class_confidence=a1_conf,
             top_two_margin=a1_margin,
             class_probabilities=a1_probs,
+            explanation=exp_res.to_dict(),
         )
 
 
