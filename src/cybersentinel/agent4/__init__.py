@@ -2,6 +2,7 @@
 
 Translates multi-agent threat assessments and fusion scores into calibrated,
 explainable, and simulated enforcement decisions (ALLOW, ALERT, REVIEW, BLOCK).
+Includes Policy What-If Simulator, Response Impact Analysis, and end-to-end Pipeline.
 """
 
 from cybersentinel.agent4.adaptive_policy import (
@@ -28,9 +29,26 @@ from cybersentinel.agent4.exceptions import (
     PolicyConfigurationError,
     PolicyExecutionError,
     PolicyInputError,
+    SimulationError,
+)
+from cybersentinel.agent4.pipeline import (
+    CyberSentinelPipeline,
+    EnforcementResult,
+    process_and_enforce_flow,
 )
 from cybersentinel.agent4.policy_config import PolicyConfig
 from cybersentinel.agent4.policy_engine import PolicyEngine, evaluate_policy
+from cybersentinel.agent4.policy_simulator import (
+    FlowSimulationRecord,
+    PolicySimulator,
+    ProfileMetrics,
+    ResponseImpactMetrics,
+    SecurityEvaluationMetrics,
+    SimulationResult,
+    calculate_security_metrics,
+    is_malicious_label,
+    simulate_policy,
+)
 
 __all__ = [
     # Contracts & Enums
@@ -49,6 +67,20 @@ __all__ = [
     # Audit Logging
     "PolicyAuditLogger",
     "DEFAULT_AUDIT_LOG_PATH",
+    # What-If Simulator & Impact Analysis
+    "PolicySimulator",
+    "simulate_policy",
+    "calculate_security_metrics",
+    "is_malicious_label",
+    "ProfileMetrics",
+    "SecurityEvaluationMetrics",
+    "ResponseImpactMetrics",
+    "FlowSimulationRecord",
+    "SimulationResult",
+    # Pipeline & Integration
+    "CyberSentinelPipeline",
+    "EnforcementResult",
+    "process_and_enforce_flow",
     # Exceptions
     "Agent4Error",
     "PolicyInputError",
@@ -61,5 +93,5 @@ __all__ = [
     "AuditLogError",
     "AuditLogWriteError",
     "AuditLogReadError",
+    "SimulationError",
 ]
-

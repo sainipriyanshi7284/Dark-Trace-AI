@@ -58,3 +58,9 @@ class AuditLogReadError(AuditLogError):
     pass
 
 
+class SimulationError(Agent4Error):
+    """Raised when an error occurs during policy what-if simulation."""
+    pass
+
+
+
