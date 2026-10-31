@@ -1,0 +1,38 @@
+================================================================================
+ DARK-TRACE-AI — AGENT 2 (NETWORK ANOMALY DETECTION) EVALUATION REPORT
+================================================================================
+Evaluation Timestamp : 2026-10-31T06:17:42.781673+00:00
+Dataset Filename     : cyber_eval.parquet
+Total Evaluated Flows: 114,185
+Features Evaluated   : 74
+Calibrated Threshold : 0.4768552114721563
+--------------------------------------------------------------------------------
+ PRIMARY & CORE METRICS:
+   Ordinary Accuracy       : 78.92% (0.789210)
+   Precision               : 91.85% (0.918531)
+   Recall (TPR)            : 60.99% (0.609885)
+   F1-Score                : 73.30% (0.733044)
+   Balanced Accuracy       : 78.05% (0.780518)
+   False Positive Rate (FPR: 4.88% (0.048849)
+   False Negative Rate (FNR: 39.01% (0.390115)
+   ROC-AUC                 : 90.94% (0.909431)
+   Average Precision (PR)  : 82.77% (0.827691)
+--------------------------------------------------------------------------------
+ CONFUSION MATRIX:
+   True Positives  (TP)    : 33,046
+   False Positives (FP)    : 2,931
+   True Negatives  (TN)    : 57,070
+   False Negatives (FN)    : 21,138
+--------------------------------------------------------------------------------
+ PER-CLASS DETECTION PERFORMANCE:
+   BENIGN          : 2,931 / 60,001 (4.88% flagged anomalous)
+   BRUTE_FORCE     : 1 / 1,384 (0.07% flagged anomalous)
+   DDOS            : 12,843 / 14,400 (89.19% flagged anomalous)
+   DOS             : 20,184 / 24,000 (84.10% flagged anomalous)
+   PORT_SCAN       : 18 / 14,400 (0.12% flagged anomalous)
+================================================================================
+ VERIFICATION STATEMENT:
+   - Existing Isolation Forest was evaluated without retraining or recalibration.
+   - Threshold was strictly derived from verified metadata.
+   - No synthetic data was generated; real original evaluation Parquet was used.
+================================================================================
