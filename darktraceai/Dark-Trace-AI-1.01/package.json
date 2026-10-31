@@ -1,0 +1,15 @@
+{
+  "name": "dark-trace-ai-root",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix \"Cybersecurity SOC Dashboard\" run dev",
+    "build": "npm --prefix \"Cybersecurity SOC Dashboard\" run build",
+    "preview": "npm --prefix \"Cybersecurity SOC Dashboard\" run preview",
+    "dist": "npm --prefix \"Cybersecurity SOC Dashboard\" run dist",
+    "tauri": "npm --prefix \"Cybersecurity SOC Dashboard\" run tauri",
+    "tauri:dev": "npm --prefix \"Cybersecurity SOC Dashboard\" run tauri:dev",
+    "tauri:build": "npm --prefix \"Cybersecurity SOC Dashboard\" run tauri:build",
+    "backend:dev": "npm --prefix \"Cybersecurity SOC Dashboard\" run backend:dev"
+  }
+}
+
