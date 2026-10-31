@@ -1,0 +1,76 @@
+{
+  "evaluation_timestamp": "2026-10-31T06:17:42.781673+00:00",
+  "dataset": {
+    "path": "/Users/parth/Documents/agenticai/Dark-Trace-AI/src/dark_trace/agent2/data/cyber_eval.parquet",
+    "filename": "cyber_eval.parquet",
+    "total_records": 114185,
+    "total_columns": 80,
+    "features_used": 74,
+    "has_record_id": true,
+    "label_distribution": {
+      "BENIGN": 60001,
+      "DOS": 24000,
+      "PORT_SCAN": 14400,
+      "DDOS": 14400,
+      "BRUTE_FORCE": 1384
+    }
+  },
+  "model": {
+    "model_type": "IsolationForest",
+    "configuration": {
+      "n_estimators": 300,
+      "max_samples": 1024,
+      "contamination": "auto",
+      "max_features": 1.0,
+      "bootstrap": false,
+      "random_state": 42
+    },
+    "threshold": 0.47685521147215626,
+    "threshold_method": "95th percentile of benign validation anomaly scores",
+    "score_definition": "negative sklearn score_samples; higher means more anomalous"
+  },
+  "metrics": {
+    "ordinary_accuracy": 0.78921,
+    "precision": 0.918531,
+    "recall": 0.609885,
+    "f1_score": 0.733044,
+    "balanced_accuracy": 0.780518,
+    "false_positive_rate": 0.048849,
+    "false_negative_rate": 0.390115,
+    "roc_auc": 0.909431,
+    "average_precision": 0.827691,
+    "confusion_matrix": {
+      "true_positives": 33046,
+      "false_positives": 2931,
+      "true_negatives": 57070,
+      "false_negatives": 21138
+    }
+  },
+  "per_class_results": {
+    "BENIGN": {
+      "records": 60001,
+      "detected_anomalies": 2931,
+      "detection_rate": 0.048849
+    },
+    "BRUTE_FORCE": {
+      "records": 1384,
+      "detected_anomalies": 1,
+      "detection_rate": 0.000723
+    },
+    "DDOS": {
+      "records": 14400,
+      "detected_anomalies": 12843,
+      "detection_rate": 0.891875
+    },
+    "DOS": {
+      "records": 24000,
+      "detected_anomalies": 20184,
+      "detection_rate": 0.841
+    },
+    "PORT_SCAN": {
+      "records": 14400,
+      "detected_anomalies": 18,
+      "detection_rate": 0.00125
+    }
+  }
+}
