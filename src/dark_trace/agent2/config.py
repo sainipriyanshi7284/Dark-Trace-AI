@@ -1,105 +1,84 @@
-"""Configuration parameters, feature definitions, and guardrail settings for Agent 2."""
+"""Agent 2 Configuration Module.
+
+Central configuration settings for Agent 2 (Network Anomaly Detection).
+Provides directory paths, artifact paths, and metadata-driven threshold loading.
+All paths are dynamically anchored to the dark_trace.agent2 package root.
+"""
 
 from dataclasses import dataclass, field
-import os
-from typing import FrozenSet, List, Optional
+from pathlib import Path
+from typing import Optional, Union
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Resolve dark_trace.agent2 package directory safely from file location
+# File location: <project_root>/src/dark_trace/agent2/config.py
+_CURRENT_FILE = Path(__file__).resolve()
+_DEFAULT_BASE_DIR = _CURRENT_FILE.parent
+_PROJECT_ROOT = _CURRENT_FILE.parent.parent.parent
 
 
-# Canonical numerical flow features used in standard intrusion detection benchmarks
-DEFAULT_NUMERICAL_FEATURES: List[str] = [
-    "flow_duration_ms",
-    "total_fwd_packets",
-    "total_bwd_packets",
-    "fwd_packet_length_mean",
-    "bwd_packet_length_mean",
-    "flow_bytes_per_sec",
-    "flow_packets_per_sec",
-    "flow_iat_mean_ms",
-    "syn_flag_count",
-    "rst_flag_count",
-    "ack_flag_count",
-]
-
-# Prohibited columns to prevent target leakage in unsupervised anomaly detection
-DEFAULT_EXCLUDED_LABELS: FrozenSet[str] = frozenset(
-    [
-        "label",
-        "attack_cat",
-        "is_attack",
-        "target",
-        "class",
-        "Label",
-        "Attack",
-        "classification",
-        "anomaly",
-    ]
-)
-
-# Non-numerical metadata columns to exclude from numerical model feature matrices
-DEFAULT_EXCLUDED_METADATA: FrozenSet[str] = frozenset(
-    [
-        "flow_id",
-        "timestamp",
-        "src_ip",
-        "dst_ip",
-        "src_port",
-        "dst_port",
-        "protocol",
-        "metadata",
-        "force_threat_intel",
-    ]
-)
-
-
-@dataclass
-class PreprocessingConfig:
-    """Settings governing feature extraction, validation, and imputation."""
-
-    imputation_strategy: str = "median"  # 'median', 'mean', or 'zero'
-    clip_infinities: bool = True
-    finite_clip_min: float = -1e9
-    finite_clip_max: float = 1e9
-    scale_features: bool = False  # False by default for tree-based Isolation Forest
-    feature_columns: Optional[List[str]] = None
-    excluded_labels: FrozenSet[str] = DEFAULT_EXCLUDED_LABELS
-    excluded_metadata: FrozenSet[str] = DEFAULT_EXCLUDED_METADATA
-
-
-@dataclass
-class ModelConfig:
-    """Hyperparameters and operational configuration for Isolation Forest."""
-
-    n_estimators: int = 100
-    max_samples: str = "auto"
-    contamination: str = "auto"  # 'auto' or float in (0.0, 0.5]
-    random_state: int = 42
-    n_jobs: int = -1
-    raw_decision_threshold: float = 0.0
-    model_version: str = "iforest_v1.0.0"
-
-
-@dataclass
-class ThreatIntelConfig:
-    """Configuration for external threat intelligence investigation (TinyFish)."""
-
-    enabled: bool = True
-    severity_trigger_threshold: float = 0.75  # Min normalized score to trigger lookup
-    cache_ttl_seconds: int = 3600  # 1 hour LRU TTL
-    request_timeout_seconds: float = 5.0
-    max_retries: int = 2
-    api_key_env_var: str = "TINYFISH_API_KEY"
-
-    @property
-    def api_key(self) -> Optional[str]:
-        """Fetch API key from environment dynamically."""
-        return os.environ.get(self.api_key_env_var)
-
-
-@dataclass
+@dataclass(frozen=True)
 class Agent2Config:
-    """Master configuration encapsulating preprocessing, ML model, and threat intel."""
+    """Configuration parameters for Agent 2 runtime and model artifacts."""
 
-    preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)
-    model: ModelConfig = field(default_factory=ModelConfig)
-    threat_intel: ThreatIntelConfig = field(default_factory=ThreatIntelConfig)
+    # Package directory paths (dynamically anchored to dark_trace.agent2)
+    base_dir: Union[Path, str] = field(default_factory=lambda: _DEFAULT_BASE_DIR)
+    artifacts_dir: Optional[Path] = None
+    data_dir: Optional[Path] = None
 
+    # Trained model artifacts from Google Colab
+    model_path: Optional[Path] = None
+    metadata_path: Optional[Path] = None
+    evaluation_path: Optional[Path] = None
+
+    # Calibrated anomaly threshold (loaded dynamically from verified metadata)
+    calibrated_threshold: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        """Resolve directory and artifact paths relative to base_dir, and load threshold."""
+        resolved_base = Path(self.base_dir).resolve()
+        object.__setattr__(self, "base_dir", resolved_base)
+        artifacts = resolved_base / "artifacts"
+        data = resolved_base / "data"
+
+        # Fallback check if user passed a custom base_dir where artifacts don't exist
+        # but package artifacts do (unless explicitly testing custom paths)
+        if self.artifacts_dir is None:
+            object.__setattr__(self, "artifacts_dir", artifacts)
+        else:
+            object.__setattr__(self, "artifacts_dir", Path(self.artifacts_dir).resolve())
+
+        if self.data_dir is None:
+            object.__setattr__(self, "data_dir", data)
+        else:
+            object.__setattr__(self, "data_dir", Path(self.data_dir).resolve())
+
+        # Artifact filenames matching Google Colab export
+        if self.model_path is None:
+            object.__setattr__(self, "model_path", self.artifacts_dir / "agent2_isolation_forest.joblib")
+        else:
+            object.__setattr__(self, "model_path", Path(self.model_path).resolve())
+
+        if self.metadata_path is None:
+            object.__setattr__(self, "metadata_path", self.artifacts_dir / "agent2_metadata.json")
+        else:
+            object.__setattr__(self, "metadata_path", Path(self.metadata_path).resolve())
+
+        if self.evaluation_path is None:
+            object.__setattr__(self, "evaluation_path", self.artifacts_dir / "agent2_final_evaluation.json")
+        else:
+            object.__setattr__(self, "evaluation_path", Path(self.evaluation_path).resolve())
+
+        # Load calibrated threshold dynamically from verified metadata if available
+        if self.calibrated_threshold is None and self.metadata_path.is_file():
+            try:
+                with open(self.metadata_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                loaded_thresh = meta.get("threshold")
+                if loaded_thresh is not None and isinstance(loaded_thresh, (int, float)):
+                    object.__setattr__(self, "calibrated_threshold", float(loaded_thresh))
+            except Exception as err:
+                logger.warning("Could not read threshold from metadata at %s: %s", self.metadata_path, err)

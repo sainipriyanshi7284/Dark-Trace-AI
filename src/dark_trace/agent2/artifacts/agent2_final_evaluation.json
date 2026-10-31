@@ -1,0 +1,39 @@
+{
+  "model": "IF_1024",
+  "threshold": 0.47685521147215626,
+  "evaluation": {
+    "true_positives": 33046,
+    "false_positives": 2931,
+    "true_negatives": 57070,
+    "false_negatives": 21138,
+    "precision": 0.9185312838758095,
+    "recall": 0.6098848368522073,
+    "f1": 0.7330442208937346,
+    "balanced_accuracy": 0.7805178255026524,
+    "false_positive_rate": 0.04884918584690255,
+    "roc_auc": 0.9094309766696073,
+    "average_precision": 0.8276907947110725
+  },
+  "attack_category_results": {
+    "BRUTE_FORCE": {
+      "records": 1384,
+      "detected": 1,
+      "recall": 0.000722543352601156
+    },
+    "DDOS": {
+      "records": 14400,
+      "detected": 12843,
+      "recall": 0.891875
+    },
+    "DOS": {
+      "records": 24000,
+      "detected": 20184,
+      "recall": 0.841
+    },
+    "PORT_SCAN": {
+      "records": 14400,
+      "detected": 18,
+      "recall": 0.00125
+    }
+  }
+}

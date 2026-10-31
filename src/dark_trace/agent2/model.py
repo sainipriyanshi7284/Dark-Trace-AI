@@ -1,274 +1,301 @@
-"""Isolation Forest anomaly detection model wrapper.
+"""Model Loading and Inference Module for Agent 2 (Network Anomaly Detection).
 
-This module encapsulates `sklearn.ensemble.IsolationForest` with strict input validation,
-hyperparameter management, fitted-state verification, and reproducible execution.
+Provides:
+- AnomalyDetectorInterface: Protocol/ABC for anomaly detection models.
+- IsolationForestDetector: Production detector wrapping scikit-learn Isolation Forest.
+
+CRITICAL INFERENCE & FEATURE RULES:
+1. STRICT FEATURE ORDERING: Exactly 74 numerical features matching the model metadata
+   in exact sequence.
+2. INPUT VALIDATION: Rejects missing features, boolean inputs, non-numeric values,
+   and non-finite numbers (NaN, +inf, -inf).
+3. EXPLICIT AVAILABILITY: Inference raises RuntimeError if the model artifact or
+   metadata is not loaded and verified.
+4. SCORING CONVENTION: score = -model.score_samples(X). Higher means more anomalous.
+5. THRESHOLD COMPARISON: is_anomaly = True if score >= threshold else False.
+6. NO RETRAINING: Pre-trained Isolation Forest artifact is loaded read-only.
 """
 
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+import json
+import logging
 import math
-from typing import Any, Dict, List, Optional, Sequence, Union
+import time
+import warnings
 
-from dark_trace.agent2.config import ModelConfig
-from dark_trace.agent2.preprocessor import NotFittedError
+import joblib
+import numpy as np
 
-# Check scikit-learn availability
-try:
-    from sklearn.ensemble import IsolationForest as SklearnIsolationForest
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SklearnIsolationForest = None
-    SKLEARN_AVAILABLE = False
+from dark_trace.agent2.config import Agent2Config
+from dark_trace.agent2.schemas import AnomalyScore
+
+logger = logging.getLogger(__name__)
 
 
-class DependencyMissingError(ImportError):
-    """Raised when an ML operation requires an external library that is not installed."""
+class AnomalyDetectorInterface(ABC):
+    """Abstract interface defining the contract for anomaly detection models."""
 
-    def __init__(self, package_name: str, purpose: str, install_cmd: str):
-        msg = (
-            f"Missing required ML dependency: '{package_name}'. "
-            f"Required for {purpose}. "
-            f"Please install it in your active virtual environment using: {install_cmd}"
-        )
-        super().__init__(msg)
-        self.package_name = package_name
-        self.purpose = purpose
-        self.install_cmd = install_cmd
+    @abstractmethod
+    def is_loaded(self) -> bool:
+        """Return True if model and metadata are loaded, verified, and ready."""
+        pass
+
+    @abstractmethod
+    def validate_features(self, features: Dict[str, Any]) -> np.ndarray:
+        """Validate input features against expected schema and return a 2D numpy array."""
+        pass
+
+    @abstractmethod
+    def predict_anomaly(self, features: Dict[str, Any]) -> AnomalyScore:
+        """Predict anomaly status and score for a single flow's features."""
+        pass
 
 
-def _validate_numerical_matrix(X: Any, expected_features: Optional[int] = None) -> List[List[float]]:
-    """Validate that input X is a non-empty 2D numerical matrix containing finite floats.
+class IsolationForestDetector(AnomalyDetectorInterface):
+    """Production Isolation Forest Anomaly Detector.
 
-    Args:
-        X: Input sequence of rows.
-        expected_features: Optional number of columns the matrix must match.
-
-    Returns:
-        List[List[float]]: Validated 2D matrix of finite floats.
-
-    Raises:
-        ValueError: If matrix is empty, non-2D, has mismatched column counts, or has NaNs/infs.
+    Wraps the trained scikit-learn IsolationForest model, validates incoming
+    network flow features against metadata, computes anomaly scores via
+    -model.score_samples(X), and compares with the calibrated threshold.
     """
-    if X is None:
-        raise ValueError("Input feature matrix X cannot be None.")
 
-    # Convert to list of rows if iterable
-    if hasattr(X, "tolist") and callable(getattr(X, "tolist")):
-        raw_rows = X.tolist()
-    elif isinstance(X, (list, tuple)):
-        raw_rows = list(X)
-    else:
-        raise ValueError(f"Unsupported input type for feature matrix: {type(X).__name__}. Expected 2D sequence.")
+    def __init__(
+        self,
+        model_path: Optional[Path] = None,
+        metadata_path: Optional[Path] = None,
+        config: Optional[Agent2Config] = None,
+    ):
+        """Initialize and automatically load the Isolation Forest model and metadata.
 
-    if not raw_rows:
-        raise ValueError("Input feature matrix X cannot be empty.")
+        Args:
+            model_path: Optional explicit path to model joblib file.
+            metadata_path: Optional explicit path to metadata JSON file.
+            config: Optional Agent2Config instance.
 
-    validated: List[List[float]] = []
-    col_count: Optional[int] = expected_features
+        Raises:
+            FileNotFoundError: If artifact files do not exist on disk.
+            ValueError: If metadata is invalid or inconsistent with model expectations.
+            RuntimeError: If artifact cannot be unpickled.
+        """
+        self.config = config or Agent2Config()
+        self.model_path = model_path or self.config.model_path
+        self.metadata_path = metadata_path or self.config.metadata_path
 
-    for i, row in enumerate(raw_rows):
-        if not isinstance(row, (list, tuple)):
-            raise ValueError(f"Row {i} in matrix is not a 1D sequence (got {type(row).__name__}).")
+        self.model: Optional[Any] = None
+        self.metadata: Dict[str, Any] = {}
+        self.feature_names: List[str] = []
+        self.expected_feature_count: int = 74
+        self.threshold: Optional[float] = None
+        self.model_version: str = "unavailable"
 
-        if col_count is None:
-            col_count = len(row)
-            if col_count == 0:
-                raise ValueError("Feature matrix has rows with 0 features.")
-        elif len(row) != col_count:
+        # Attempt safe loading if paths are provided
+        if self.model_path is not None and self.metadata_path is not None:
+            self._load_and_verify()
+
+    def _load_and_verify(self) -> None:
+        """Load model artifact and verified metadata, validating schema consistency."""
+        m_path = Path(self.model_path).resolve()
+        meta_path = Path(self.metadata_path).resolve()
+
+        if not m_path.is_file():
+            raise FileNotFoundError(f"Isolation Forest model artifact not found at {m_path}")
+        if not meta_path.is_file():
+            raise FileNotFoundError(f"Model metadata artifact not found at {meta_path}")
+
+        # 1. Load and parse metadata JSON
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                loaded_metadata = json.load(f)
+        except Exception as err:
+            raise ValueError(f"Failed to parse metadata JSON at {meta_path}: {err}") from err
+
+        feature_names = loaded_metadata.get("feature_names")
+        if not feature_names or not isinstance(feature_names, list):
+            raise ValueError(f"Metadata must contain a non-empty list of 'feature_names': {meta_path}")
+
+        if len(feature_names) != 74:
+            raise ValueError(f"Expected exactly 74 feature names in metadata, got {len(feature_names)}")
+
+        threshold = loaded_metadata.get("threshold")
+        if threshold is None or not isinstance(threshold, (int, float)):
+            raise ValueError(f"Metadata missing valid numeric 'threshold': {meta_path}")
+        if not math.isfinite(threshold) or threshold <= 0.0:
+            raise ValueError(f"Metadata threshold must be positive, got {threshold}")
+
+        # 2. Load model artifact using joblib
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                loaded_model = joblib.load(m_path)
+        except Exception as err:
+            raise RuntimeError(f"Failed to unpickle model artifact at {m_path}: {err}") from err
+
+        # 3. Validate estimator compatibility
+        estimator_class = getattr(loaded_model, "__class__", None)
+        class_name = estimator_class.__name__ if estimator_class else ""
+        if "IsolationForest" not in class_name:
+            raise ValueError(f"Expected IsolationForest estimator, found: {class_name}")
+
+        n_features = getattr(loaded_model, "n_features_in_", None)
+        if n_features != 74:
+            raise ValueError(f"Model n_features_in_ must be 74, found {n_features}")
+
+        # 4. Check model feature names if preserved on estimator
+        if hasattr(loaded_model, "feature_names_in_"):
+            model_feat_list = list(loaded_model.feature_names_in_)
+            if model_feat_list != feature_names:
+                raise ValueError("Model feature_names_in_ does not match metadata feature_names ordering.")
+
+        # Commit loaded state
+        self.model = loaded_model
+        self.metadata = loaded_metadata
+        self.feature_names = list(feature_names)
+        self.expected_feature_count = len(self.feature_names)
+        self.threshold = float(threshold)
+        self.model_path = m_path
+        self.metadata_path = meta_path
+        self.model_version = loaded_metadata.get("model", "IsolationForest_CICIDS2017")
+
+        logger.info(
+            "Successfully loaded Isolation Forest detector (%d features, threshold=%.8f) from %s",
+            self.expected_feature_count,
+            self.threshold,
+            m_path,
+        )
+
+    def is_loaded(self) -> bool:
+        """Check whether the Isolation Forest model artifact is loaded and validated."""
+        return (
+            self.model is not None
+            and bool(self.feature_names)
+            and len(self.feature_names) == 74
+            and self.threshold is not None
+            and math.isfinite(self.threshold)
+        )
+
+    def validate_features(self, features: Dict[str, Any]) -> np.ndarray:
+        """Validate and extract all 74 required features in exact metadata order.
+
+        Rules:
+        - Must be loaded.
+        - Features must be a dictionary.
+        - All 74 feature names from metadata must be present.
+        - All values must be valid numeric types (convertible to float).
+        - Booleans are rejected (not numeric features).
+        - Values must NOT be NaN, +inf, or -inf.
+        - Extra non-feature dictionary keys are permitted and safely ignored.
+        - Features are ordered strictly according to metadata, NOT incoming dictionary order.
+        - Missing features are never silently imputed with zero.
+
+        Args:
+            features: Dictionary mapping feature names to values.
+
+        Returns:
+            np.ndarray: 2D array of shape (1, 74) with float64 values.
+
+        Raises:
+            RuntimeError: If model is not loaded.
+            ValueError: If missing features, non-numeric values, or non-finite numbers exist.
+        """
+        if not self.is_loaded():
+            raise RuntimeError(
+                "Cannot validate features: Isolation Forest model is not loaded and verified."
+            )
+
+        if not isinstance(features, dict):
+            raise ValueError(f"Features must be provided as a dictionary, got {type(features).__name__}")
+
+        # Check for missing features
+        missing_features = [name for name in self.feature_names if name not in features]
+        if missing_features:
+            sample_missing = missing_features[:5]
+            ellipsis_str = "..." if len(missing_features) > 5 else ""
             raise ValueError(
-                f"Inconsistent feature dimensions: row {i} has {len(row)} features, "
-                f"expected {col_count}."
+                f"Missing {len(missing_features)} required features: {sample_missing}{ellipsis_str}"
             )
 
-        float_row: List[float] = []
-        for j, val in enumerate(row):
+        ordered_values: List[float] = []
+        for name in self.feature_names:
+            val = features[name]
             if val is None:
-                raise ValueError(
-                    f"Non-finite value detected at row {i}, column {j}: None. "
-                    "Ensure AnomalyPreprocessor.transform() is executed before model inference."
-                )
+                raise ValueError(f"Feature '{name}' has value None; finite numeric float required.")
+            if isinstance(val, (bool, np.bool_)):
+                raise ValueError(f"Feature '{name}' has boolean value {val!r}; finite numeric value required.")
+
+            # Attempt numeric conversion
             try:
-                f_val = float(val)
-            except (TypeError, ValueError):
+                num = float(val)
+            except (ValueError, TypeError) as err:
                 raise ValueError(
-                    f"Non-numeric value detected at row {i}, column {j}: {val!r}. "
-                    "All features must be numeric floats."
-                )
+                    f"Feature '{name}' has non-numeric value {val!r}: {err}"
+                ) from err
 
-            if math.isnan(f_val):
-                raise ValueError(
-                    f"NaN value detected at row {i}, column {j}. "
-                    "Ensure AnomalyPreprocessor.transform() is executed before model inference."
-                )
-            if math.isinf(f_val):
-                raise ValueError(
-                    f"Infinite value ({f_val}) detected at row {i}, column {j}. "
-                    "Ensure AnomalyPreprocessor.transform() clips infinities before model inference."
-                )
+            # Check for non-finite values (NaN, +inf, -inf)
+            if math.isnan(num):
+                raise ValueError(f"Feature '{name}' contains NaN (not a number).")
+            if math.isinf(num):
+                raise ValueError(f"Feature '{name}' contains infinite value: {num}.")
 
-            float_row.append(f_val)
+            ordered_values.append(num)
 
-        validated.append(float_row)
-
-    return validated
-
-
-class IsolationForestModel:
-    """Wrapper around scikit-learn's Isolation Forest anomaly detector.
-
-    Supports configurable tree counts, contamination ratios, deterministic random states,
-    and rigorous validation.
-    """
-
-    def __init__(self, config: Optional[ModelConfig] = None, **kwargs):
-        """Initialize the model wrapper.
-
-        Args:
-            config: Optional ModelConfig dataclass.
-            **kwargs: Hyperparameter overrides (e.g. n_estimators, contamination, random_state).
-        """
-        base_config = config or ModelConfig()
-
-        # Apply overrides if provided
-        self.n_estimators = int(kwargs.get("n_estimators", base_config.n_estimators))
-        self.max_samples = kwargs.get("max_samples", base_config.max_samples)
-        self.contamination = kwargs.get("contamination", base_config.contamination)
-        self.random_state = kwargs.get("random_state", base_config.random_state)
-        self.n_jobs = kwargs.get("n_jobs", base_config.n_jobs)
-        self.raw_decision_threshold = float(
-            kwargs.get("raw_decision_threshold", base_config.raw_decision_threshold)
-        )
-        self.version = str(kwargs.get("model_version", base_config.model_version))
-
-        # Hyperparameter sanity validation
-        if self.n_estimators <= 0:
-            raise ValueError(f"n_estimators must be greater than 0, got {self.n_estimators}")
-
-        if isinstance(self.contamination, (int, float)):
-            if not (0.0 < float(self.contamination) <= 0.5):
-                raise ValueError(
-                    f"contamination must be 'auto' or in range (0.0, 0.5], got {self.contamination}"
-                )
-        elif self.contamination != "auto":
-            raise ValueError(f"contamination must be 'auto' or float, got {self.contamination!r}")
-
-        self.sklearn_model_: Optional[Any] = None
-        self.n_features_in_: Optional[int] = None
-        self.is_fitted_: bool = False
-
-    @property
-    def is_fitted(self) -> bool:
-        """Return True if the model has been fitted."""
-        return self.is_fitted_
-
-    @property
-    def model_version(self) -> str:
-        """Return model version string."""
-        return self.version
-
-    def check_is_fitted(self) -> None:
-        """Verify that the model has been fitted; raises NotFittedError if not."""
-        if not self.is_fitted_ or self.sklearn_model_ is None:
-            raise NotFittedError(
-                "This IsolationForestModel instance is not fitted yet. "
-                "Call 'fit' with training data before using this method."
+        feature_matrix = np.array([ordered_values], dtype=np.float64)
+        if feature_matrix.shape != (1, self.expected_feature_count):
+            raise ValueError(
+                f"Feature matrix shape mismatch: expected (1, {self.expected_feature_count}), got {feature_matrix.shape}"
             )
 
-    def _require_sklearn(self, operation: str) -> Any:
-        """Check that scikit-learn is available, raising DependencyMissingError if not."""
-        if not SKLEARN_AVAILABLE or SklearnIsolationForest is None:
-            raise DependencyMissingError(
-                package_name="scikit-learn",
-                purpose=f"Isolation Forest model {operation}",
-                install_cmd="pip install scikit-learn",
-            )
-        return SklearnIsolationForest
+        return feature_matrix
 
-    def fit(self, X: Any, y: Any = None) -> "IsolationForestModel":
-        """Fit the Isolation Forest model on the numerical training matrix X.
+    def predict_anomaly(self, features: Dict[str, Any]) -> AnomalyScore:
+        """Execute calibrated anomaly scoring on a single flow's extracted features.
+
+        Calculates anomaly score = -model.score_samples(X).
+        Compares with calibrated threshold from metadata: is_anomaly = (score >= threshold).
 
         Args:
-            X: 2D array-like sequence of shape (n_samples, n_features).
-            y: Ignored (unsupervised). Included for API consistency.
+            features: Dictionary containing all 74 numerical feature values.
 
         Returns:
-            self: The fitted IsolationForestModel instance.
+            AnomalyScore: Detailed anomaly evidence.
+
+        Raises:
+            RuntimeError: If called before model is loaded.
+            ValueError: If feature validation fails.
         """
-        cls_sklearn = self._require_sklearn("training")
-        matrix = _validate_numerical_matrix(X)
+        if not self.is_loaded():
+            raise RuntimeError(
+                "Isolation Forest model is unavailable. Artifact and verified metadata must be loaded."
+            )
 
-        self.n_features_in_ = len(matrix[0])
+        # Validate and construct input in exact metadata order
+        feature_matrix = self.validate_features(features)
 
-        # Instantiate underlying scikit-learn model
-        self.sklearn_model_ = cls_sklearn(
-            n_estimators=self.n_estimators,
-            max_samples=self.max_samples,
-            contamination=self.contamination,
-            random_state=self.random_state,
-            n_jobs=self.n_jobs,
+        start_time = time.perf_counter()
+
+        # Score using -score_samples(X)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning, message=".*does not have valid feature names.*")
+            raw_scores = self.model.score_samples(feature_matrix)
+
+        latency_ms = (time.perf_counter() - start_time) * 1000.0
+
+        raw_score = float(-raw_scores[0])
+        is_anomaly = bool(raw_score >= self.threshold)
+
+        return AnomalyScore(
+            status="EVALUATED",
+            is_anomaly=is_anomaly,
+            raw_score=raw_score,
+            normalized_score=None,  # Not modeled without a defensible calibrated formula
+            threshold=self.threshold,
+            model_version=self.model_version,
+            supporting_features=[],  # IF does not provide reliable per-feature attribution
+            inference_latency_ms=round(latency_ms, 4),
+            error_message=None,
         )
 
-        self.sklearn_model_.fit(matrix)
-        self.is_fitted_ = True
-        return self
 
-    def predict(self, X: Any) -> List[int]:
-        """Predict whether samples are inliers (1) or outliers (-1).
-
-        Args:
-            X: 2D array-like of shape (n_samples, n_features).
-
-        Returns:
-            List[int]: 1 for normal inlier, -1 for anomaly outlier.
-        """
-        self.check_is_fitted()
-        matrix = _validate_numerical_matrix(X, expected_features=self.n_features_in_)
-        preds = self.sklearn_model_.predict(matrix)
-        return [int(p) for p in preds]
-
-    def decision_function(self, X: Any) -> List[float]:
-        """Compute the raw anomaly decision score for each sample.
-
-        Score semantics:
-        - Negative scores indicate outliers (anomalies).
-        - Positive scores indicate inliers (normal).
-
-        Args:
-            X: 2D array-like of shape (n_samples, n_features).
-
-        Returns:
-            List[float]: Raw decision function values.
-        """
-        self.check_is_fitted()
-        matrix = _validate_numerical_matrix(X, expected_features=self.n_features_in_)
-        scores = self.sklearn_model_.decision_function(matrix)
-        return [float(s) for s in scores]
-
-    def score_samples(self, X: Any) -> List[float]:
-        """Compute the opposite of the anomaly score defined in the original paper.
-
-        Lower values indicate higher degree of anomaly.
-
-        Args:
-            X: 2D array-like of shape (n_samples, n_features).
-
-        Returns:
-            List[float]: Sample anomaly scores.
-        """
-        self.check_is_fitted()
-        matrix = _validate_numerical_matrix(X, expected_features=self.n_features_in_)
-        scores = self.sklearn_model_.score_samples(matrix)
-        return [float(s) for s in scores]
-
-    def get_params(self) -> Dict[str, Any]:
-        """Return model hyperparameters as a dictionary."""
-        return {
-            "n_estimators": self.n_estimators,
-            "max_samples": self.max_samples,
-            "contamination": self.contamination,
-            "random_state": self.random_state,
-            "n_jobs": self.n_jobs,
-            "raw_decision_threshold": self.raw_decision_threshold,
-            "model_version": self.version,
-            "n_features_in": self.n_features_in_,
-            "is_fitted": self.is_fitted_,
-        }
-
+# Backward compatibility alias
+IsolationForestModel = IsolationForestDetector
