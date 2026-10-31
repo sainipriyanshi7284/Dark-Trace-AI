@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default permissions for the Dark Trace AI main window","local":true,"windows":["main"],"permissions":["core:default"]}}

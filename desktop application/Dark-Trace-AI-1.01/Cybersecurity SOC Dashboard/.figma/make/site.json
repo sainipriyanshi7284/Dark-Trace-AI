@@ -1,0 +1,11 @@
+{
+  "title": "Dark Trace AI",
+  "description": "Analyze CICIDS2017 traffic replays with AI-driven intrusion detection, threat investigations, and model performance insights for security operations teams.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
